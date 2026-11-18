@@ -8,16 +8,13 @@
 4. If migrating from an existing database, run `python scripts/migrate_v3.py`.
 5. Generate the demo datasets with `python scripts/generate_datasets.py`.
 6. Seed the company catalog with `python scripts/seed_companies.py`.
-7. Configure `.env` with `SECRET_KEY`, `ADMIN_REGISTRATION_CODE`, and SMTP variables.
+7. Configure `.env` with `SECRET_KEY` and `ADMIN_REGISTRATION_CODE` (development default: `0808`; replace before deployment).
 8. Start the app with `flask --app app run --debug`.
 
-## Account Registration & Email Verification
+## Account Registration
 
-- Register at `/register` with your email and password (enter admin code if creating an administrator).
-- A 6-digit one-time verification code is emailed to the address provided (valid for 10 minutes).
-- Enter the code at `/verify-email` to activate the account.
-- Resending is protected by a 60-second cooldown and an hourly rate limit. 5 incorrect code attempts lock the code.
-- Log in at `/login` after verification. Unverified accounts cannot log in until verified.
+- Choose **Create Account as User** or **Create Account as Admin** at `/register`. Admin accounts are created only after the server verifies the secret admin code.
+- Choose the matching **Sign in as User** or **Sign in as Admin** mode at `/login`. The account role must match the selected mode.
 
 ## Demo companies
 
@@ -35,8 +32,8 @@ These company records are stored in the database and each one references its own
 - Upload or generate a CSV that follows the company schema.
 - Train or retrain a model from the dataset.
 - Run prediction calls through the schema-aware service layer.
-- Export prediction history as CSV, Excel (.xlsx), or both, or have reports emailed directly to your registered address.
-- Bulk predict with optional email delivery of scored results.
+- Export prediction history as CSV.
+- Bulk predict and download the scored results.
 - Administrators assign user workspace permissions in **Admin → Users → Manage access**. A user can select and make predictions only in an active company workspace assigned to that account. Administrators automatically have access to every active company.
 
 ## Notes

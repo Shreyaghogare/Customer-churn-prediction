@@ -10,7 +10,6 @@ from churn_app.models import (
     AdminActivityLog,
     Company,
     CompanyDataset,
-    EmailOTP,
     LoginLog,
     Prediction,
     TrainedModel,
@@ -21,14 +20,13 @@ from churn_app.models import (
 from churn_app.services import build_data_quality_report, infer_schema, train_company_model
 
 
-def add_user(app, *, name="Test User", email="user@example.com", role="user", email_verified=True):
+def add_user(app, *, name="Test User", email="user@example.com", role="user"):
     with app.app_context():
         user = User(
             name=name,
             email=email,
             password_hash=generate_password_hash("StrongPass1!"),
             role=role,
-            email_verified=email_verified,
         )
         db.session.add(user)
         db.session.commit()
@@ -41,7 +39,13 @@ def authenticate(client, user_id):
         session["_fresh"] = True
 
 
-def test_register_uses_admin_code_and_assigns_users_by_default(app, client):
+def test_registration_requires_explicit_admin_mode_and_secret_code(app, client):
+    user_registration_page = client.get("/register")
+    admin_registration_page = client.get("/register?mode=admin")
+    assert b'id="admin_code"' not in user_registration_page.data
+    assert b'id="admin_code"' in admin_registration_page.data
+    assert b"0808" not in admin_registration_page.data
+
     weak = client.post("/register", data={
         "name": "First Admin",
         "email": "FIRST@example.com",
@@ -56,181 +60,103 @@ def test_register_uses_admin_code_and_assigns_users_by_default(app, client):
         "email": "FIRST@example.com",
         "password": "StrongPass1!",
         "confirm_password": "StrongPass1!",
+        "account_type": "admin",
         "admin_code": "wrong-code",
     })
     assert response.status_code == 200
-    assert b"admin registration code is invalid" in response.data
+    assert b"Invalid admin secret code. Please enter the correct code." in response.data
+    with app.app_context():
+        assert User.query.count() == 0
 
     response = client.post("/register", data={
-        "name": "First Admin",
+        "name": "First User",
         "email": "FIRST@example.com",
         "password": "StrongPass1!",
         "confirm_password": "StrongPass1!",
-        "admin_code": "test-admin-code",
     })
     assert response.status_code == 302
     with app.app_context():
         first = User.query.one()
         assert first.email == "first@example.com"
-        assert first.role == "admin"
+        assert first.role == "user"
+        assert first.password_hash != "StrongPass1!"
 
-    client.post("/register", data={
-        "name": "Second User",
-        "email": "second@example.com",
+    duplicate = client.post("/register", data={
+        "name": "Duplicate User",
+        "email": "FIRST@example.com",
         "password": "StrongPass1!",
         "confirm_password": "StrongPass1!",
     })
-    with app.app_context():
-        assert User.query.filter_by(email="second@example.com").one().role == "user"
+    assert duplicate.status_code == 200
+    assert b"An account with this email already exists." in duplicate.data
 
-
-def test_registration_and_email_verification_flow(app, client, monkeypatch):
-    import re
-
-    sent_messages = []
-    monkeypatch.setattr("churn_app.services.email_service.send_email", lambda msg: sent_messages.append(msg))
-
-    # 1. Register new admin account
-    registration = client.post("/register", data={
-        "name": "First Admin",
+    response = client.post("/register", data={
+        "name": "Admin User",
         "email": "admin@example.com",
         "password": "StrongPass1!",
         "confirm_password": "StrongPass1!",
-        "admin_code": "test-admin-code",
+        "account_type": "admin",
+        "admin_code": "0808",
     })
-
-    assert registration.status_code == 302
-    assert "/verify-email" in registration.headers["Location"]
-    assert len(sent_messages) == 1
-    assert sent_messages[0]["To"] == "admin@example.com"
-    email_content = sent_messages[0].get_body(preferencelist=("plain",)).get_content()
-    match = re.search(r"\b(\d{6})\b", email_content)
-    assert match is not None
-    code = match.group(1)
-
-    # User in DB is not verified yet
+    assert response.status_code == 302
+    assert "/login?mode=admin" in response.headers["Location"]
     with app.app_context():
-        user = User.query.filter_by(email="admin@example.com").one()
-        assert user.email_verified is False
-        assert user.role == "admin"
+        admin = User.query.filter_by(email="admin@example.com").one()
+        assert admin.role == "admin"
+        assert admin.password_hash != "StrongPass1!"
+        assert User.query.count() == 2
 
-    # 2. Login before verification must be blocked and redirect to /verify-email
-    blocked_login = client.post("/login", data={
-        "email": "admin@example.com",
+
+def test_user_and_admin_sign_in_modes_enforce_roles_and_keep_admin_dashboard(app, client):
+    user_sign_in_page = client.get("/login")
+    admin_sign_in_page = client.get("/login?mode=admin")
+    assert b"Sign in as User" in user_sign_in_page.data
+    assert b"Sign in as Admin" in user_sign_in_page.data
+    assert b"Sign In as Admin" in admin_sign_in_page.data
+
+    user_id = add_user(app, email="user@example.com")
+    admin_id = add_user(app, name="Admin User", email="admin@example.com", role="admin")
+
+    user_client = app.test_client()
+    user_admin_login = user_client.post("/login?mode=admin", data={
+        "account_type": "admin",
+        "email": "user@example.com",
         "password": "StrongPass1!",
-    }, follow_redirects=False)
-    assert blocked_login.status_code == 302
-    assert "/verify-email" in blocked_login.headers["Location"]
+    })
+    assert user_admin_login.status_code == 200
+    assert b"You are not authorized to access the admin account." in user_admin_login.data
 
-    # 3. Verify with code
-    verify_response = client.post(
-        "/verify-email?email=admin@example.com",
-        data={"code": code},
-        follow_redirects=True,
-    )
-    assert verify_response.status_code == 200
-    assert b"Your email has been verified" in verify_response.data
-
-    with app.app_context():
-        user = User.query.filter_by(email="admin@example.com").one()
-        assert user.email_verified is True
-        assert user.email_verified_at is not None
-
-    # 4. Login after verification now works
-    login_response = client.post("/login", data={
+    admin_client = app.test_client()
+    admin_user_login = admin_client.post("/login?mode=user", data={
+        "account_type": "user",
         "email": "admin@example.com",
         "password": "StrongPass1!",
     })
-    assert login_response.status_code == 302
-    assert login_response.headers["Location"].endswith("/admin/dashboard")
+    assert admin_user_login.status_code == 200
+    assert b"Admin accounts must use Admin Sign In." in admin_user_login.data
 
-
-def test_verify_email_wrong_code_expired_code_and_lockout(app, client, monkeypatch):
-    sent_messages = []
-    monkeypatch.setattr("churn_app.services.email_service.send_email", lambda msg: sent_messages.append(msg))
-
-    client.post("/register", data={
-        "name": "Lock User",
-        "email": "lock@example.com",
+    user_login = user_client.post("/login?mode=user", data={
+        "account_type": "user",
+        "email": "user@example.com",
         "password": "StrongPass1!",
-        "confirm_password": "StrongPass1!",
     })
+    assert user_login.status_code == 302
+    assert user_login.headers["Location"].endswith("/dashboard")
+    assert user_client.get("/admin/dashboard").status_code == 403
 
-    # Wrong code 4 times
-    for attempt in range(1, 5):
-        resp = client.post("/verify-email?email=lock@example.com", data={"code": "000000"})
-        assert resp.status_code == 200
-        assert f"{5 - attempt} attempt".encode() in resp.data
-
-    # 5th wrong code locks / invalidates the code
-    resp5 = client.post("/verify-email?email=lock@example.com", data={"code": "000000"})
-    assert resp5.status_code == 200
-    assert b"invalidated" in resp5.data
-
-    # 6th attempt shows locked/invalidated message
-    resp6 = client.post("/verify-email?email=lock@example.com", data={"code": "000000"})
-    assert resp6.status_code == 200
-    assert b"locked" in resp6.data or b"invalidated" in resp6.data
-
-    # Expired code test
-    with app.app_context():
-        from datetime import timedelta
-        user = User.query.filter_by(email="lock@example.com").one()
-        otp = EmailOTP.query.filter_by(user_id=user.id).order_by(EmailOTP.created_at.desc()).first()
-        otp.expires_at = utc_now() - timedelta(minutes=1)
-        otp.attempts = 0
-        db.session.commit()
-
-    expired_resp = client.post("/verify-email?email=lock@example.com", data={"code": "123456"})
-    assert expired_resp.status_code == 200
-    assert b"expired" in expired_resp.data
-
-
-def test_resend_code_cooldown_and_rate_limit(app, client, monkeypatch):
-    sent_messages = []
-    monkeypatch.setattr("churn_app.services.email_service.send_email", lambda msg: sent_messages.append(msg))
-
-    client.post("/register", data={
-        "name": "Resend User",
-        "email": "resend@example.com",
+    admin_login = admin_client.post("/login?mode=admin", data={
+        "account_type": "admin",
+        "email": "admin@example.com",
         "password": "StrongPass1!",
-        "confirm_password": "StrongPass1!",
     })
-    assert len(sent_messages) == 1
-
-    # Immediate resend triggers 60s cooldown
-    cooldown_resp = client.post("/resend-code", data={"email": "resend@example.com"}, follow_redirects=True)
-    assert b"Please wait" in cooldown_resp.data
-    assert len(sent_messages) == 1
-
-    # Fast forward OTP created_at in database
+    assert admin_login.status_code == 302
+    assert admin_login.headers["Location"].endswith("/admin/dashboard")
+    dashboard = admin_client.get("/admin/dashboard")
+    assert dashboard.status_code == 200
+    assert b"System overview" in dashboard.data
     with app.app_context():
-        from datetime import timedelta
-        user = User.query.filter_by(email="resend@example.com").one()
-        otp = EmailOTP.query.filter_by(user_id=user.id).order_by(EmailOTP.created_at.desc()).first()
-        otp.created_at = utc_now() - timedelta(seconds=65)
-        db.session.commit()
-
-    resend_ok = client.post("/resend-code", data={"email": "resend@example.com"}, follow_redirects=True)
-    assert b"new verification code has been sent" in resend_ok.data
-    assert len(sent_messages) == 2
-
-    # Simulate reaching 5 sends in last hour
-    with app.app_context():
-        from datetime import timedelta
-        user = User.query.filter_by(email="resend@example.com").one()
-        for i in range(4):
-            db.session.add(EmailOTP(
-                user_id=user.id,
-                code_hash="fake",
-                purpose="verify_email",
-                expires_at=utc_now() + timedelta(minutes=10),
-                created_at=utc_now() - timedelta(minutes=i + 5),
-            ))
-        db.session.commit()
-
-    limit_resp = client.post("/resend-code", data={"email": "resend@example.com"}, follow_redirects=True)
-    assert b"maximum of 5 verification requests per hour" in limit_resp.data
+        assert db.session.get(User, user_id).role == "user"
+        assert db.session.get(User, admin_id).role == "admin"
 
 
 def test_login_generic_failure_lockout_and_audit(app, client):
@@ -487,170 +413,6 @@ def test_history_renders_company_prediction_without_legacy_telco_fields(app, cli
     assert report.mimetype == "application/pdf"
 
 
-def test_email_history_sends_filtered_csv_to_signed_in_account(app, client, monkeypatch):
-    user_id = add_user(app)
-    with app.app_context():
-        db.session.add(Prediction(
-            user_id=user_id,
-            prediction="Yes",
-            probability=0.82,
-            risk_level="High Risk",
-            risk_factors=[],
-            suggested_actions=[],
-        ))
-        db.session.commit()
-    authenticate(client, user_id)
-    app.config.update({
-        "SMTP_HOST": "smtp.example.com",
-        "SMTP_PORT": 587,
-        "SMTP_USERNAME": "mailer@example.com",
-        "SMTP_PASSWORD": "smtp-password",
-        "SMTP_SENDER": "mailer@example.com",
-        "SMTP_USE_TLS": True,
-    })
-    sent = {}
-
-    class FakeSMTP:
-        def __init__(self, host, port, timeout):
-            sent["connection"] = (host, port, timeout)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def starttls(self):
-            sent["tls"] = True
-
-        def login(self, username, password):
-            sent["login"] = (username, password)
-
-        def send_message(self, message):
-            sent["message"] = message
-
-    monkeypatch.setattr(main_routes.smtplib, "SMTP", FakeSMTP)
-
-    response = client.post(
-        "/history/email.csv?prediction=Yes",
-        data={"message": "Please review this high-risk customer."},
-        follow_redirects=True,
-    )
-
-    assert response.status_code == 200
-    assert b"Prediction CSV emailed to your account" in response.data
-    assert sent["connection"] == ("smtp.example.com", 587, 15)
-    assert sent["tls"] is True
-    assert sent["login"] == ("mailer@example.com", "smtp-password")
-    message = sent["message"]
-    assert message["To"] == "user@example.com"
-    assert message.get_body(preferencelist=("plain",)).get_content().strip() == "Please review this high-risk customer."
-    assert "Please review this high-risk customer." in message.get_body(preferencelist=("html",)).get_content()
-    attachments = list(message.iter_attachments())
-    assert len(attachments) == 1
-    assert attachments[0].get_filename() == "churn-predictions.csv"
-    assert b"Yes" in attachments[0].get_payload(decode=True)
-
-
-def test_email_history_formats_csv_xlsx_and_both(app, client, monkeypatch):
-    import io
-    import openpyxl
-    from churn_app.services.email_service import reset_outgoing_email_rate_limits
-
-    reset_outgoing_email_rate_limits()
-    user_id = add_user(app, email="export-test@example.com")
-    with app.app_context():
-        db.session.add(Prediction(
-            user_id=user_id,
-            prediction="Yes",
-            probability=0.82,
-            risk_level="High Risk",
-            gender="Female",
-            age=45,
-            tenure=24,
-            monthly_charges=75.5,
-            total_charges=1800.0,
-            contract_type="Month-to-month",
-            internet_service="Fiber optic",
-            tech_support="No",
-            risk_factors=[],
-            suggested_actions=[],
-        ))
-        db.session.commit()
-
-    authenticate(client, user_id)
-    app.config.update({
-        "SMTP_HOST": "smtp.example.com",
-        "SMTP_PORT": 587,
-        "SMTP_USERNAME": "mailer@example.com",
-        "SMTP_PASSWORD": "smtp-password",
-        "SMTP_SENDER": "mailer@example.com",
-        "SMTP_USE_TLS": True,
-    })
-
-    sent_messages = []
-
-    class FakeSMTP:
-        def __init__(self, host, port, timeout):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def starttls(self):
-            pass
-
-        def login(self, username, password):
-            pass
-
-        def send_message(self, message):
-            sent_messages.append(message)
-
-    monkeypatch.setattr(main_routes.smtplib, "SMTP", FakeSMTP)
-
-    # 1. Test CSV format
-    resp_csv = client.post("/history/email.csv", data={"file_format": "csv", "message": "Here is CSV."}, follow_redirects=True)
-    assert resp_csv.status_code == 200
-    assert b"Prediction CSV emailed to your account" in resp_csv.data
-    msg = sent_messages[-1]
-    assert msg["To"] == "export-test@example.com"
-    attachments = list(msg.iter_attachments())
-    assert len(attachments) == 1
-    assert attachments[0].get_filename() == "churn-predictions.csv"
-    assert b"Yes" in attachments[0].get_payload(decode=True)
-
-    # 2. Test XLSX format
-    resp_xlsx = client.post("/history/email.csv", data={"file_format": "xlsx", "message": "Here is Excel."}, follow_redirects=True)
-    assert resp_xlsx.status_code == 200
-    assert b"Prediction Excel export emailed to your account" in resp_xlsx.data
-    msg = sent_messages[-1]
-    assert msg["To"] == "export-test@example.com"
-    attachments = list(msg.iter_attachments())
-    assert len(attachments) == 1
-    assert attachments[0].get_filename() == "churn-predictions.xlsx"
-    assert attachments[0].get_content_type() == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    wb = openpyxl.load_workbook(io.BytesIO(attachments[0].get_payload(decode=True)))
-    ws = wb.active
-    headers = [cell.value for cell in ws[1]]
-    assert "Prediction" in headers
-    assert "Probability" in headers
-    assert "Risk Level" in headers
-
-    # 3. Test Both format
-    resp_both = client.post("/history/email.csv", data={"file_format": "both", "message": "Here is both."}, follow_redirects=True)
-    assert resp_both.status_code == 200
-    assert b"Prediction CSV and Excel export emailed to your account" in resp_both.data
-    msg = sent_messages[-1]
-    assert msg["To"] == "export-test@example.com"
-    attachments = list(msg.iter_attachments())
-    assert len(attachments) == 2
-    filenames = {att.get_filename() for att in attachments}
-    assert filenames == {"churn-predictions.csv", "churn-predictions.xlsx"}
-
-
 def test_formula_injection_cells_escaped():
     import io
     import openpyxl
@@ -673,83 +435,6 @@ def test_formula_injection_cells_escaped():
     xlsx_data = build_xlsx(columns, rows)
     wb = openpyxl.load_workbook(io.BytesIO(xlsx_data))
     assert wb.active["B2"].value == "'=cmd|' /C calc'!A0"
-
-
-def test_outgoing_email_rate_limit(app, client, monkeypatch):
-    from churn_app.services.email_service import reset_outgoing_email_rate_limits
-
-    reset_outgoing_email_rate_limits()
-    user_id = add_user(app, email="ratelimit@example.com")
-    with app.app_context():
-        db.session.add(Prediction(
-            user_id=user_id,
-            prediction="No",
-            probability=0.2,
-            risk_level="Low Risk",
-            risk_factors=[],
-            suggested_actions=[],
-        ))
-        db.session.commit()
-    authenticate(client, user_id)
-    app.config.update({
-        "SMTP_HOST": "smtp.example.com",
-        "SMTP_PORT": 587,
-        "SMTP_USERNAME": "mailer@example.com",
-        "SMTP_PASSWORD": "smtp-password",
-        "SMTP_SENDER": "mailer@example.com",
-        "SMTP_USE_TLS": True,
-    })
-
-    class FakeSMTP:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def starttls(self):
-            pass
-
-        def login(self, *args):
-            pass
-
-        def send_message(self, *args):
-            pass
-
-    monkeypatch.setattr(main_routes.smtplib, "SMTP", FakeSMTP)
-
-    # Send 10 emails (limit is 10/hour)
-    for _ in range(10):
-        res = client.post("/history/email.csv", data={"file_format": "csv"}, follow_redirects=True)
-        assert b"Prediction CSV emailed to your account" in res.data
-
-    # 11th email must be rate limited
-    blocked = client.post("/history/email.csv", data={"file_format": "csv"}, follow_redirects=True)
-    assert b"limit of 10 outgoing emails per hour" in blocked.data
-
-
-def test_email_history_requires_login_and_reports_missing_smtp_config(app, client):
-    assert client.post("/history/email.csv").status_code == 302
-
-    user_id = add_user(app)
-    with app.app_context():
-        db.session.add(Prediction(
-            user_id=user_id,
-            prediction="No",
-            probability=0.1,
-            risk_level="Low Risk",
-            risk_factors=[],
-            suggested_actions=[],
-        ))
-        db.session.commit()
-    authenticate(client, user_id)
-    response = client.post("/history/email.csv", data={"message": "Please review."}, follow_redirects=True)
-
-    assert response.status_code == 200
-    assert b"Email delivery is not configured" in response.data
 
 
 def test_prediction_handles_missing_model_probability(app, client, monkeypatch, tmp_path):
@@ -1246,107 +931,4 @@ def test_company_csv_download_contains_uploadable_dataset_rows(app, client, monk
     with app.app_context():
         assert Prediction.query.filter_by(company_id=company_id).count() == 2
 
-
-def test_bulk_upload_emails_results_when_checked(app, client, monkeypatch, tmp_path):
-    import io
-    import pandas as pd
-    from churn_app.services.email_service import reset_outgoing_email_rate_limits
-
-    reset_outgoing_email_rate_limits()
-    user_id = add_user(app, email="bulk-email@example.com")
-    data_path = tmp_path / "template-company2.csv"
-    pd.DataFrame({
-        "CustomerID": ["C001", "C002"],
-        "Age": [25, 40],
-        "Gender": ["Female", "Male"],
-        "Churn": ["No", "Yes"],
-    }).to_csv(data_path, index=False)
-    with app.app_context():
-        company = Company(name="BulkEmailCo", slug="bulkemailco", industry="Retail")
-        db.session.add(company)
-        db.session.flush()
-        dataset = CompanyDataset(
-            company_id=company.id,
-            filename="template-company2.csv",
-            row_count=2,
-            schema_json={
-                "columns": ["CustomerID", "Age", "Gender", "Churn"],
-                "target_column": "Churn",
-                "id_columns": ["CustomerID"],
-            },
-            data_path=str(data_path),
-        )
-        db.session.add(dataset)
-        db.session.flush()
-        db.session.add_all([
-            TrainedModel(
-                company_id=company.id,
-                dataset_id=dataset.id,
-                algorithm="StubModel",
-                model_path="stub.joblib",
-                is_active=True,
-            ),
-            UserCompanyAccess(user_id=user_id, company_id=company.id),
-        ])
-        db.session.commit()
-        company_id = company.id
-
-    with client.session_transaction() as session:
-        session["active_company_id"] = str(company_id)
-    authenticate(client, user_id)
-
-    app.config.update({
-        "SMTP_HOST": "smtp.example.com",
-        "SMTP_PORT": 587,
-        "SMTP_USERNAME": "mailer@example.com",
-        "SMTP_PASSWORD": "smtp-password",
-        "SMTP_SENDER": "mailer@example.com",
-        "SMTP_USE_TLS": True,
-    })
-
-    sent_messages = []
-
-    class FakeSMTP:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def starttls(self):
-            pass
-
-        def login(self, *args):
-            pass
-
-        def send_message(self, message):
-            sent_messages.append(message)
-
-    monkeypatch.setattr("churn_app.services.email_service.smtplib.SMTP", FakeSMTP)
-    monkeypatch.setattr(main_routes, "predict_many", lambda _company, data: data.assign(
-        Prediction="No", Probability=0.15, RiskLevel="Low Risk"
-    ))
-
-    csv_upload = "Age,Gender\n25,Female\n40,Male\n"
-    response = client.post(
-        "/bulk",
-        data={
-            "file": (io.BytesIO(csv_upload.encode()), "customers.csv"),
-            "email_results": "y",
-            "file_format": "xlsx",
-            "message": "Bulk scored results note.",
-        },
-        content_type="multipart/form-data",
-        follow_redirects=True,
-    )
-    assert response.status_code == 200
-    assert b"Bulk predictions saved and emailed to your account" in response.data
-    assert len(sent_messages) == 1
-    assert sent_messages[0]["To"] == "bulk-email@example.com"
-    attachments = list(sent_messages[0].iter_attachments())
-    assert len(attachments) == 1
-    assert attachments[0].get_filename() == "bulk-churn-predictions.xlsx"
 

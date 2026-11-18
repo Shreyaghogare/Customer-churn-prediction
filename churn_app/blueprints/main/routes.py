@@ -2,7 +2,6 @@ import csv
 import html
 import io
 import math
-import smtplib
 from datetime import date, datetime, time, timedelta
 from email.message import EmailMessage
 from pathlib import Path
@@ -27,15 +26,8 @@ from wtforms import SelectField, StringField
 from wtforms.validators import InputRequired
 
 from ...extensions import db
-from ...forms import BulkUploadForm, ChangePasswordForm, EmailHistoryForm, PredictionForm, ProfileForm
+from ...forms import BulkUploadForm, ChangePasswordForm, PredictionForm, ProfileForm
 from ...models import Company, LoginLog, Prediction, User, UserCompanyAccess, utc_now
-from ...services.email_service import (
-    EmailConfigurationError,
-    check_outgoing_email_rate_limit,
-    record_outgoing_email_sent,
-    send_email,
-    send_export_email,
-)
 from ...services.export_service import build_csv, build_xlsx
 from ...services.prediction_service import (
     get_active_dataset,
@@ -737,7 +729,6 @@ def history():
         predictions=pagination.items,
         filters=filters,
         is_admin=current_user.role == "admin",
-        email_form=EmailHistoryForm(),
     )
 
 
@@ -786,55 +777,6 @@ def export_history():
     response.headers["Content-Type"] = "text/csv; charset=utf-8"
     response.headers["Content-Disposition"] = "attachment; filename=churn-predictions.csv"
     return response
-
-
-@bp.route("/history/email.csv", methods=["POST"])
-@login_required
-def email_history():
-    form = EmailHistoryForm()
-    if not form.validate_on_submit():
-        for errors in form.errors.values():
-            for error in errors:
-                flash(error, "error")
-        return redirect(url_for("main.history", **history_query()[1]))
-
-    query, filters = history_query()
-    if not query.first():
-        flash("There are no predictions matching these filters to email.", "warning")
-        return redirect(url_for("main.history", **filters))
-
-    if not check_outgoing_email_rate_limit(current_user.id):
-        flash("You have reached the limit of 10 outgoing emails per hour. Please try again later.", "warning")
-        return redirect(url_for("main.history", **filters))
-
-    file_format = form.file_format.data or "csv"
-    columns, rows = get_history_export_data(query, is_admin=current_user.role == "admin")
-    csv_bytes = build_csv(columns, rows) if file_format in ("csv", "both") else None
-    xlsx_bytes = build_xlsx(columns, rows, sheet_name="Prediction History") if file_format in ("xlsx", "both") else None
-
-    try:
-        send_export_email(
-            recipient_email=current_user.email,
-            subject="Your churn prediction history",
-            message_text=form.message.data,
-            csv_bytes=csv_bytes,
-            csv_filename="churn-predictions.csv",
-            xlsx_bytes=xlsx_bytes,
-            xlsx_filename="churn-predictions.xlsx",
-        )
-        record_outgoing_email_sent(current_user.id)
-    except EmailConfigurationError as error:
-        current_app.logger.error("Could not email prediction history to account %s: %s", current_user.id, error)
-        flash(f"Email delivery is not configured: {error}", "error")
-        return redirect(url_for("main.history", **filters))
-    except (ValueError, OSError, smtplib.SMTPException) as error:
-        current_app.logger.error("Could not email prediction history to account %s: %s", current_user.id, error)
-        flash(f"The email could not be sent: {error}", "error")
-        return redirect(url_for("main.history", **filters))
-
-    format_desc = "Excel export" if file_format == "xlsx" else "CSV and Excel export" if file_format == "both" else "CSV"
-    flash(f"Prediction {format_desc} emailed to your account ({current_user.email}).", "success")
-    return redirect(url_for("main.history", **filters))
 
 
 @bp.route("/history/<int:prediction_id>/delete", methods=["POST"])
@@ -1009,36 +951,6 @@ def bulk_predict():
                     row["Prediction"], round(probability * 100, 2), row["RiskLevel"],
                 ])
             db.session.commit()
-
-            if form.email_results.data:
-                if not check_outgoing_email_rate_limit(current_user.id):
-                    flash("You have reached the limit of 10 outgoing emails per hour. Predictions were saved, but email could not be sent.", "warning")
-                    return redirect(url_for("main.bulk_predict"))
-
-                file_format = form.file_format.data or "csv"
-                csv_bytes = build_csv(export_columns, export_rows) if file_format in ("csv", "both") else None
-                xlsx_bytes = build_xlsx(export_columns, export_rows, sheet_name="Bulk Predictions") if file_format in ("xlsx", "both") else None
-
-                try:
-                    send_export_email(
-                        recipient_email=current_user.email,
-                        subject="Your bulk churn predictions",
-                        message_text=form.message.data,
-                        csv_bytes=csv_bytes,
-                        csv_filename="bulk-churn-predictions.csv",
-                        xlsx_bytes=xlsx_bytes,
-                        xlsx_filename="bulk-churn-predictions.xlsx",
-                    )
-                    record_outgoing_email_sent(current_user.id)
-                    flash(f"Bulk predictions saved and emailed to your account ({current_user.email}).", "success")
-                except EmailConfigurationError as error:
-                    current_app.logger.error("Could not email bulk predictions to account %s: %s", current_user.id, error)
-                    flash(f"Predictions saved, but email delivery is not configured: {error}", "error")
-                except (ValueError, OSError, smtplib.SMTPException) as error:
-                    current_app.logger.error("Could not email bulk predictions to account %s: %s", current_user.id, error)
-                    flash(f"Predictions saved, but the email could not be sent: {error}", "error")
-
-                return redirect(url_for("main.bulk_predict"))
 
             csv_content = build_csv(export_columns, export_rows)
             response = make_response(csv_content)

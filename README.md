@@ -16,33 +16,32 @@ py -3.12 -m venv .venv
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 $secret = py -c "import secrets; print(secrets.token_hex(32))"
-$adminCode = py -c "import secrets; print(secrets.token_urlsafe(24))"
+$adminCode = "0808"
 @("SECRET_KEY=$secret", "ADMIN_REGISTRATION_CODE=$adminCode") | Set-Content .env
 flask --app app run --debug
 ```
 
-Open `http://127.0.0.1:5000`. The VS Code launch profiles read the same `.env` file. Use the value of `ADMIN_REGISTRATION_CODE` on the registration form only when creating an administrator; leave it blank for a regular user. Both roles sign in at `/login` with the same email/password form and are sent to their role-specific dashboard. Keep `.env` private. To run with `python app.py` instead of the Flask CLI, set both values in the current PowerShell session first:
+Open `http://127.0.0.1:5000`. Choose **Sign in as User** or **Sign in as Admin** on the login page, and select the corresponding account type when registering. Admin registration requires the server-side `ADMIN_REGISTRATION_CODE` (development default: `0808`). Change it to a private value before deploying. Keep `.env` private. To run with `python app.py` instead of the Flask CLI, set both values in the current PowerShell session first:
 
 ```powershell
 $env:SECRET_KEY = (py -c "import secrets; print(secrets.token_hex(32))")
-$env:ADMIN_REGISTRATION_CODE = (py -c "import secrets; print(secrets.token_urlsafe(24))")
+$env:ADMIN_REGISTRATION_CODE = "0808"
 python app.py
 ```
 
-The SQLite database is created automatically at `instance/churn.sqlite`. New accounts are regular Users unless a valid admin registration code is provided. Existing accounts keep their current roles; administrators can also manage roles from **Admin → Users**. For existing databases created prior to email verification, run the database migration script:
+The SQLite database is created automatically at `instance/churn.sqlite`. New accounts are regular Users by default; only the separate admin registration flow with a valid secret code creates an administrator. Existing accounts and their roles are preserved; administrators can also manage roles from **Admin → Users**. The historical database migration script can be run when needed:
 ```powershell
 python scripts/migrate_v3.py
 ```
 
 ## Usage
 
-- **Register and Email Verification:** Registration validates names, email addresses, and password strength. Upon registration, a 6-digit one-time verification code (OTP) is sent to the registered email address. The code expires in 10 minutes and allows up to 5 attempts before being locked. Users must verify their email at `/verify-email` before signing in. A 60-second cooldown and a limit of 5 requests per hour protect code resending. In local development (`FLASK_DEBUG=1` or testing), generated verification codes are also written to the application logger.
-- **Sign In:** Both Admins and Users sign in at `/login`. Accounts with unverified email addresses are prompted to complete email verification before accessing the workspace.
+- **Registration:** Registration validates names, email addresses, and password strength. Accounts can sign in immediately after creation.
+- **Sign In:** User and Admin sign-in modes are separate. A login only succeeds when the account role matches the selected mode.
 - **Workspace Predictions:** Select a company workspace from the dashboard. Predictions use only that company's active dataset and trained model; numeric values must stay within observed dataset ranges and categories must match dataset values.
 - **Train Models:** Before predicting for the first time, train active company datasets with `python scripts/train_company_models.py` from the activated project environment.
-- **Bulk Prediction & Email Delivery:** Upload a CSV using the company-specific template on the Bulk Prediction page (up to 500 rows). You can check "Email results to my registered account" with an optional note and choose CSV, Excel (.xlsx), or both. When unchecked, results are directly downloaded as CSV.
-- **Prediction History & Export:** Browse, filter, and export prediction history. Individual prediction PDFs can be generated directly. Users can email filtered records to their registered account as CSV, Excel (.xlsx), or both with an optional note. Outgoing exports are protected against formula injection, restricted to 5 MB per email, and rate-limited to 10 emails per hour per user.
-- **SMTP Setup:** To enable verification emails and data export delivery, configure SMTP settings in `.env` (such as Gmail with App Passwords or Outlook). Ensure `SMTP_HOST`, `SMTP_PORT` (default 587), `SMTP_USE_TLS=true`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_SENDER` are set.
+- **Bulk Prediction:** Upload a CSV using the company-specific template on the Bulk Prediction page (up to 500 rows). Results are directly downloaded as CSV.
+- **Prediction History & Export:** Browse, filter, and export prediction history as CSV. Individual prediction PDFs can be generated directly.
 - **Admin Management:** Admins can manage accounts and roles, grant or revoke user access to active company workspaces from **Users → Manage access**, review workspace-wide predictions and audit logs, and inspect the model card. Users can select and predict only for companies granted to their account; administrators automatically see all active companies.
 - **Risk Thresholds:** Prediction-risk bands are Low below 30%, Medium from 30% to below 60%, and High at 60% or higher.
 
@@ -52,7 +51,7 @@ python scripts/migrate_v3.py
 pytest
 ```
 
-The tests cover registration, OTP email verification flow (including expiration, attempt lockout, and resend cooldown), existing-account sign-in, login lockout/auditing, export generation (CSV and Excel .xlsx with openpyxl verification), formula injection escaping, outgoing email delivery, admin access controls, and prediction persistence.
+The tests cover account registration, role-specific sign-in, login lockout/auditing, export generation, formula injection escaping, admin access controls, and prediction persistence.
 
 ## Project Structure
 

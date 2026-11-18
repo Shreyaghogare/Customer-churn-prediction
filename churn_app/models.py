@@ -22,26 +22,10 @@ class User(UserMixin, db.Model):
     locked_until = db.Column(db.DateTime(timezone=True))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utc_now)
     last_login = db.Column(db.DateTime(timezone=True))
-    email_verified = db.Column(db.Boolean, nullable=False, default=False)
-    email_verified_at = db.Column(db.DateTime(timezone=True))
     predictions = db.relationship("Prediction", backref="user", cascade="all, delete-orphan")
     login_logs = db.relationship("LoginLog", backref="user", passive_deletes=True)
     created_companies = db.relationship("Company", foreign_keys="Company.created_by", backref="creator")
     company_accesses = db.relationship("UserCompanyAccess", backref="user", cascade="all, delete-orphan")
-    email_otps = db.relationship("EmailOTP", backref="user", cascade="all, delete-orphan", passive_deletes=True)
-
-
-class EmailOTP(db.Model):
-    __tablename__ = "email_otp"
-
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
-    code_hash = db.Column(db.String(255), nullable=False)
-    purpose = db.Column(db.String(50), nullable=False, default="verify_email")
-    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
-    attempts = db.Column(db.Integer, nullable=False, default=0)
-    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utc_now)
-    used_at = db.Column(db.DateTime(timezone=True))
 
 
 class Company(db.Model):

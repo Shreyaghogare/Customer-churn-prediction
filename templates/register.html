@@ -3,7 +3,11 @@
 {% block content %}
 <section class="auth-layout">
     <div class="auth-aside"><p class="eyebrow">CUSTOMER INTELLIGENCE</p><h1>Build better retention decisions.</h1><p>Create a workspace account to predict churn, track outcomes, and support customers earlier.</p><div class="auth-stat"><strong>01</strong><span>One clear view of customer risk.</span></div></div>
-    <section class="panel auth-panel"><p class="eyebrow">NEW ACCOUNT</p><h2>Create your account</h2><p class="muted">Create an account to get started. Already registered? <a href="{{ url_for('auth.login') }}">Sign in</a></p>
+    <section class="panel auth-panel"><p class="eyebrow">NEW ACCOUNT</p><h2>{{ "Create Admin Account" if mode == "admin" else "Create your account" }}</h2><p class="muted">Already registered? <a href="{{ url_for('auth.login', mode=mode) }}">Sign in</a></p>
+        <nav class="auth-mode-switch" aria-label="Choose account type">
+            <a class="button {{ 'primary' if mode == 'user' else 'quiet' }}" href="{{ url_for('auth.register', mode='user') }}" {% if mode == 'user' %}aria-current="page"{% endif %}>Create Account as User</a>
+            <a class="button {{ 'primary' if mode == 'admin' else 'quiet' }}" href="{{ url_for('auth.register', mode='admin') }}" {% if mode == 'admin' %}aria-current="page"{% endif %}>Create Account as Admin</a>
+        </nav>
         <form method="post" novalidate id="register-form">
             {{ form.hidden_tag() }}
             <label for="name">Full name</label>{{ form.name(id="name", autocomplete="name", maxlength="50", placeholder="e.g. Asha Kumar", class="field-control") }}<span class="field-error" data-error="name">{{ form.name.errors[0] if form.name.errors else "" }}</span>
@@ -11,9 +15,10 @@
             <label for="password">Password</label>{{ form.password(id="password", minlength="8", autocomplete="new-password", class="field-control", aria_describedby="strength-label") }}
             <div class="strength-track"><span id="strength-meter"></span></div><div class="strength-copy"><span id="strength-label">Password strength</span><span id="strength-score"></span></div><span class="field-error" data-error="password">{{ form.password.errors[0] if form.password.errors else "" }}</span>
             <label for="confirm_password">Confirm password</label>{{ form.confirm_password(id="confirm_password", minlength="8", autocomplete="new-password", class="field-control") }}<span class="field-error" data-error="confirm">{{ form.confirm_password.errors[0] if form.confirm_password.errors else "" }}</span>
-            <label for="admin_code">Admin registration code <span class="muted">(optional)</span></label>{{ form.admin_code(id="admin_code", autocomplete="off", class="field-control") }}{% for error in form.admin_code.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
-            <p class="muted">Leave this blank for a regular user account. Admin access requires a code from the application administrator.</p>
-            <button class="button primary full" type="submit">Create account <span aria-hidden="true">→</span></button>
+            {% if mode == "admin" %}
+            <label for="admin_code">Secret Admin Code</label>{{ form.admin_code(id="admin_code", autocomplete="off", class="field-control") }}{% for error in form.admin_code.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
+            {% endif %}
+            <button class="button primary full" type="submit">{{ "Create Admin Account" if mode == "admin" else "Create Account as User" }} <span aria-hidden="true">→</span></button>
         </form>
     </section>
 </section>

@@ -3,13 +3,19 @@
 {% block content %}
 <section class="auth-layout login-layout">
     <div class="auth-aside"><p class="eyebrow">CHURN COMPASS</p><h1>See risk earlier. Act with confidence.</h1><p>Sign in to your customer retention workspace.</p><div class="signal-row"><span class="signal-dot"></span><span>Prediction workspace</span><span class="signal-line"></span><span>Customer outcomes</span></div></div>
-    <section class="panel auth-panel"><p class="eyebrow">WELCOME BACK</p><h2>Sign in</h2><p class="muted">New to Churn Compass? <a href="{{ url_for('auth.register') }}">Create an account</a></p>
+    <section class="panel auth-panel"><p class="eyebrow">WELCOME BACK</p><h2>{{ "Admin sign in" if mode == "admin" else "Sign in" }}</h2><p class="muted">New to Churn Compass? <a href="{{ url_for('auth.register', mode=mode) }}">Create an account</a></p>
+        <nav class="auth-mode-switch" aria-label="Choose sign-in type">
+            <a class="button {{ 'primary' if mode == 'user' else 'quiet' }}" href="{{ url_for('auth.login', mode='user') }}" {% if mode == 'user' %}aria-current="page"{% endif %}>Sign in as User</a>
+            <a class="button {{ 'primary' if mode == 'admin' else 'quiet' }}" href="{{ url_for('auth.login', mode='admin') }}" {% if mode == 'admin' %}aria-current="page"{% endif %}>Sign in as Admin</a>
+        </nav>
         <form method="post" novalidate>
             {{ form.hidden_tag() }}
             <label for="email">Email address</label>{{ form.email(id="email", type="email", autocomplete="username", placeholder="you@example.com", class="field-control") }}{% for error in form.email.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
             <label for="password">Password</label>{{ form.password(id="password", autocomplete="current-password", class="field-control") }}{% for error in form.password.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
+            {% if mode == "user" %}
             <label class="checkbox-row">{{ form.remember_me() }} <span>Remember me</span></label>
-            <button class="button primary full" type="submit">Sign in <span aria-hidden="true">→</span></button>
+            {% endif %}
+            <button class="button primary full" type="submit">{{ "Sign In as Admin" if mode == "admin" else "Sign In as User" }} <span aria-hidden="true">→</span></button>
         </form>
     </section>
 </section>

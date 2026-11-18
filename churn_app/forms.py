@@ -1,8 +1,8 @@
 import re
 
 from flask_wtf import FlaskForm
-from wtforms import BooleanField, FileField, FloatField, IntegerField, PasswordField, SelectField, StringField, SubmitField, TextAreaField
-from wtforms.validators import DataRequired, Email, EqualTo, Length, NumberRange, Optional, Regexp, ValidationError
+from wtforms import BooleanField, FileField, FloatField, HiddenField, IntegerField, PasswordField, SelectField, StringField, SubmitField
+from wtforms.validators import AnyOf, DataRequired, Email, EqualTo, Length, NumberRange, Optional, ValidationError
 
 from .models import User
 
@@ -21,11 +21,12 @@ def validate_name(_form, field):
 
 
 class RegisterForm(FlaskForm):
+    account_type = HiddenField(default="user", validators=[DataRequired(), AnyOf(["user", "admin"])])
     name = StringField("Full name", validators=[DataRequired(), Length(min=2, max=50), validate_name])
     email = StringField("Email", validators=[DataRequired(), Email(), Length(max=254)])
     password = PasswordField("Password", validators=[DataRequired(), validate_password])
     confirm_password = PasswordField("Confirm password", validators=[DataRequired(), EqualTo("password", message="Passwords must match.")])
-    admin_code = PasswordField("Admin registration code", validators=[Optional(), Length(max=256)])
+    admin_code = PasswordField("Secret admin code", validators=[Optional(), Length(max=256)])
     submit = SubmitField("Create account")
 
     def validate_email(self, field):
@@ -36,6 +37,7 @@ class RegisterForm(FlaskForm):
 
 
 class LoginForm(FlaskForm):
+    account_type = HiddenField(default="user", validators=[DataRequired(), AnyOf(["user", "admin"])])
     email = StringField("Email", validators=[DataRequired(), Email(), Length(max=254)])
     password = PasswordField("Password", validators=[DataRequired()])
     remember_me = BooleanField("Remember me")
@@ -66,37 +68,6 @@ class PredictionForm(FlaskForm):
     submit = SubmitField("Predict churn")
 
 
-class VerifyEmailForm(FlaskForm):
-    code = StringField(
-        "Verification code",
-        validators=[
-            DataRequired(message="Enter the 6-digit verification code."),
-            Length(min=6, max=6, message="The verification code must be 6 digits."),
-            Regexp(r"^\d{6}$", message="The verification code must be 6 digits."),
-        ],
-    )
-    submit = SubmitField("Verify email")
-
-
 class BulkUploadForm(FlaskForm):
     file = FileField("Customer CSV", validators=[DataRequired()])
-    email_results = BooleanField("Email results to my account")
-    file_format = SelectField(
-        "File format",
-        choices=[("csv", "CSV"), ("xlsx", "Excel (.xlsx)"), ("both", "Both (CSV and Excel)")],
-        default="csv",
-        validate_choice=False,
-    )
-    message = TextAreaField("Message (optional)", validators=[Optional(), Length(max=1000)])
     submit = SubmitField("Run bulk prediction")
-
-
-class EmailHistoryForm(FlaskForm):
-    file_format = SelectField(
-        "File format",
-        choices=[("csv", "CSV"), ("xlsx", "Excel (.xlsx)"), ("both", "Both (CSV and Excel)")],
-        default="csv",
-        validate_choice=False,
-    )
-    message = TextAreaField("Message (optional)", validators=[Optional(), Length(max=1000)])
-    submit = SubmitField("Email to my account")

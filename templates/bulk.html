@@ -14,21 +14,6 @@
             {{ form.file(id="file", accept=".csv,text/csv", class="field-control") }}
             {% for error in form.file.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
 
-            <label class="checkbox-row" style="margin-top: 1rem; margin-bottom: 0.5rem;">
-                {{ form.email_results(id="email_results") }}
-                <span>Email results to my registered account ({{ current_user.email }})</span>
-            </label>
-
-            <div id="bulk-email-fields" style="margin-top: 0.5rem; margin-bottom: 1rem;">
-                <label for="file_format">{{ form.file_format.label.text }}</label>
-                {{ form.file_format(id="file_format", class="field-control") }}
-                {% for error in form.file_format.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
-
-                <label for="bulk-message" style="margin-top: 0.5rem;">{{ form.message.label.text }}</label>
-                {{ form.message(id="bulk-message", rows="2", maxlength="1000", class="field-control", placeholder="Add an optional note to the email") }}
-                {% for error in form.message.errors %}<span class="field-error">{{ error }}</span>{% endfor %}
-            </div>
-
             <button class="button primary" type="submit" {% if schema_error %}disabled{% endif %}>Validate and predict</button>
         </form>
     </section>

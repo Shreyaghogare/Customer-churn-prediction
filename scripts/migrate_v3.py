@@ -28,45 +28,10 @@ def backup_database() -> None:
         print(f"Backed up database to {backup_path}")
 
 
-def ensure_email_otp_table(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS email_otp (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            code_hash VARCHAR(255) NOT NULL,
-            purpose VARCHAR(50) NOT NULL DEFAULT 'verify_email',
-            expires_at DATETIME NOT NULL,
-            attempts INTEGER NOT NULL DEFAULT 0,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            used_at DATETIME,
-            FOREIGN KEY(user_id) REFERENCES user(id) ON DELETE CASCADE
-        )
-        """
-    )
-    connection.execute(
-        "CREATE INDEX IF NOT EXISTS ix_email_otp_user_id ON email_otp (user_id)"
-    )
-
-
 def migrate() -> None:
     backup_database()
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
-
-    # Add email verification columns to user table
-    if connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user'").fetchone() is not None:
-        add_column_if_missing(connection, "user", "email_verified BOOLEAN NOT NULL DEFAULT 0")
-        add_column_if_missing(connection, "user", "email_verified_at TEXT")
-
-        # Set email_verified=True for all existing users so they can still log in
-        updated = connection.execute(
-            "UPDATE user SET email_verified = 1, email_verified_at = CURRENT_TIMESTAMP WHERE email_verified = 0 OR email_verified IS NULL"
-        ).rowcount
-        print(f"Marked {updated} existing user(s) as verified.")
-
-    # Create email_otp table
-    ensure_email_otp_table(connection)
 
     connection.commit()
     connection.close()
